@@ -57,6 +57,17 @@ function reverse(str) {
   return [...str].reduce((rev, currentChar) => currentChar + rev, "");
 }
 
+function genSalt() {
+  //const salt = `${Date.now()}_${randString(10)}`;
+  const salt = Date.now()
+    .toString()
+    .substr(0, 8)
+    .split("")
+    .map((e, i) => (i % 5 == 4 ? e + "_" : e))
+    .join("");
+  return "salt_" + salt + "_" + Math.ceil(Math.random() * 100000);
+}
+
 function getTimeToken(salt, time_string) {
   let hmac = encryptor.hmac("token_" + salt + parseTimeSafeSec(time_string));
 
@@ -74,18 +85,7 @@ function getTimeToken(salt, time_string) {
   );
 }
 
-function genSalt() {
-  //const salt = `${Date.now()}_${randString(10)}`;
-  const salt = Date.now()
-    .toString()
-    .substr(0, 8)
-    .split("")
-    .map((e, i) => (i % 5 == 4 ? e + "_" : e))
-    .join("");
-  return "salt_" + salt + "_" + Math.ceil(Math.random() * 100000);
-}
-
-function getTimeProof(salt, timeStart, timeEnd, enc_data) {
+function getTimeEndedProof(salt, timeStart, timeEnd, enc_data) {
   return (
     "begintime_" +
     encryptor.hmac(
@@ -94,9 +94,51 @@ function getTimeProof(salt, timeStart, timeEnd, enc_data) {
   );
 }
 
+function getTempTimeToken(time_string, salt, timeCreated) {
+  // long token to help you proove you had the key (token) in time X
+  let hmac = encryptor.hmac("temp_" + salt + time_string + timeCreated);
+  return "temp_" + hmac;
+}
+
+function getFastTempTimeToken(time_string, salt, timeCreated) {
+  // short text to copy to other device that will work for 2 minute
+  // after you show the temp proof
+  let now = Date.now();
+
+  let secDiff = ((((now - timeCreated) % 60) * 1000) / 60) * 1000;
+  let minDiff = Math.floor(
+    ((now - timeCreated - secDiff * 60 * 1000) / 60) * 60 * 1000
+  );
+
+  let sec = padDigits(secDiff, 2);
+  let minute = padDigits(minDiff, 2);
+
+  let timeToSign = no;
+
+  let tempproof = encryptor
+    .hmac([time_string, salt, sec, minute].join("|"))
+    .substr(0, 6);
+
+  return {
+    secdiff: sec,
+    mindiff: minute,
+    fastproof: tempproof
+  };
+}
+
+function verifyFastTempToken(time_string, salt, sec, minute, fastproof) {
+  let expected_proof = encryptor
+    .hmac([time_string, salt, sec, minute].join("|"))
+    .substr(0, 6);
+
+  if (fastproof !== expected_proof) {
+    return false;
+  } else {
+  }
+}
+
 app.get("/api/redirect", (rq, rs) => {
-  rs.setHeader("content-type", "text/html");
-  rs.send("<script>window.location.href='" + rq.query["url"] + "'</script>");
+  rs.status(403).send("deprecated");
 });
 
 // [token times] => {salt=time+rnd, tokens=[{time,hmac(salt+time)}] }
@@ -138,6 +180,50 @@ app.get("/api/enc", (req, resp) => {
   resp.send({ enckey: encDataArray });
 });
 
+app.get("/api/temp/get", (req, resp) => {
+  if (!req.query["token"] || !req.query["tokenproof"] || !req.query["salt"]) {
+    resp.send({ err: "Missing params in /temp/get" });
+    return;
+  }
+
+  const time_string = req.query["token"];
+  const time_token = req.query["tokenproof"];
+  const salt = req.query["salt"];
+
+  if (getTimeToken(salt, time_string) !== time_token) {
+    resp.send({ err: `Can't validate token: '${time_token}'` });
+  } else {
+    let createTime = Date.now();
+    let tempProof = getTempTimeToken(time_string, salt, createTime);
+
+    resp.send({ from: createTime, tempproof: tempProof });
+  }
+});
+
+app.get("/api/temp/fast", (req, resp) => {
+  if (
+    !req.query["token"] ||
+    !req.query["tempproof"] ||
+    !req.query["from"] ||
+    !req.query["salt"]
+  ) {
+    resp.send({ err: "Missing params in /temp/fast" });
+    return;
+  }
+
+  const time_string = req.query["token"];
+  const temp_token = req.query["tempproof"];
+  const createTime = req.query["from"];
+  const salt = req.query["salt"];
+
+  if (getTempTimeToken(time_string, salt, createTime) !== temp_token) {
+    resp.send({ err: `Can't validate temp token: '${temp_token}'` });
+  } else {
+    let fastTokenInfo = getFastTempTimeToken(time_string, salt, createTime);
+    resp.send(fastTokenInfo);
+  }
+});
+
 const DEFAULT_UNLOCK_WINDOW_MIN = 15;
 // {enckey, token_time, token_hmac, salt} => {end_time,timed_proof = hmac(time,data_hash)}
 app.get("/api/unlock/begin", (req, resp) => {
@@ -150,7 +236,7 @@ app.get("/api/unlock/begin", (req, resp) => {
       !req.query["duration"] ||
       !req.query["salt"]
     ) {
-      resp.send({ err: "Missing params in /enc" });
+      resp.send({ err: "Missing params in /unlock/begin" });
       return;
     }
     const enckey = fromSafeURL(req.query["enckey"]);
@@ -182,7 +268,7 @@ app.get("/api/unlock/begin", (req, resp) => {
         endTime.getMinutes() + waitTimeMin + offset_strat_min + duration
       );
 
-      let timeProof = getTimeProof(salt, startTime, endTime, enckey);
+      let timeProof = getTimeEndedProof(salt, startTime, endTime, enckey);
       resp.send({
         from: startTime.getTime(),
         to: endTime.getTime(),
@@ -201,7 +287,7 @@ app.get("/api/unlock/finish", (req, resp) => {
     !req.query["proof"] ||
     !req.query["salt"]
   ) {
-    resp.send({ err: "Missing params in /enc" });
+    resp.send({ err: "Missing params in /unlock/finsih" });
     return;
   }
   const enckey = fromSafeURL(req.query["enckey"]);
@@ -210,7 +296,7 @@ app.get("/api/unlock/finish", (req, resp) => {
   const timeProof = req.query["proof"];
   const salt = req.query["salt"];
 
-  let calcTimeProof = getTimeProof(salt, timeStart, timeEnd, enckey);
+  let calcTimeProof = getTimeEndedProof(salt, timeStart, timeEnd, enckey);
   if (calcTimeProof !== timeProof) {
     resp.send({ err: `Can't validate proof: '${timeProof}'` });
   } else {
