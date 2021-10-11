@@ -100,45 +100,55 @@ function getTempTimeToken(time_string, salt, timeCreated) {
   return "temp_" + hmac;
 }
 
+function getISOMin(d) {
+  // '2021-10-11T19:03:14.619Z' -> '2021-10-11T19:03'
+  return d.toISOString().split(/:[0-9]{2}\./)[0];
+}
+
 function getFastTempTimeToken(time_string, salt, timeCreated) {
   // short text to copy to other device that will work for 2 minute
   // after you show the temp proof
-  let now = Date.now();
+  let now = new Date();
 
-  let secDiff = ((((now - timeCreated) % 60) * 1000) / 60) * 1000;
+  let secDiff = ((((now.getDate() - timeCreated) % 60) * 1000) / 60) * 1000;
   let minDiff = Math.floor(
-    ((now - timeCreated - secDiff * 60 * 1000) / 60) * 60 * 1000
+    ((now.getDate() - timeCreated - secDiff * 60 * 1000) / 60) * 60 * 1000
   );
 
   let sec = padDigits(secDiff, 2);
   let minute = padDigits(minDiff, 2);
 
-  let timeToSign = no;
-
-  let tempproof = encryptor
-    .hmac([time_string, salt, sec, minute].join("|"))
+  let fastTempProof = encryptor
+    .hmac([time_string, salt, sec, minute, getISOMin(now)].join("|"))
     .substr(0, 6);
 
   return {
     secdiff: sec,
     mindiff: minute,
-    fastproof: tempproof
+    fastproof: fastTempProof
   };
 }
 
+const fastTempValidMin = 3;
 function verifyFastTempToken(time_string, salt, sec, minute, fastproof) {
-  let expected_proof = encryptor
-    .hmac([time_string, salt, sec, minute].join("|"))
-    .substr(0, 6);
+  let d = new Date();
 
-  if (fastproof !== expected_proof) {
-    return false;
-  } else {
+  let fastTempValid = false;
+  for (let i = 0; i < fastTempValidMin; i++) {
+    let expected_proof = encryptor
+      .hmac([time_string, salt, sec, minute, getISOMin(d)].join("|"))
+      .substr(0, 6);
+
+    if (expected_proof === fastproof) {
+      fastTempValid = true;
+    }
   }
+
+  return fastTempValid;
 }
 
 app.get("/api/redirect", (rq, rs) => {
-  rs.status(403).send("deprecated");
+  rs.status(403).send({ err: "/api/redirect deprecated" });
 });
 
 // [token times] => {salt=time+rnd, tokens=[{time,hmac(salt+time)}] }
@@ -180,9 +190,9 @@ app.get("/api/enc", (req, resp) => {
   resp.send({ enckey: encDataArray });
 });
 
-app.get("/api/temp/get", (req, resp) => {
+app.get("/api/temp/begin", (req, resp) => {
   if (!req.query["token"] || !req.query["tokenproof"] || !req.query["salt"]) {
-    resp.send({ err: "Missing params in /temp/get" });
+    resp.send({ err: "Missing params in /temp/begin" });
     return;
   }
 
@@ -222,6 +232,21 @@ app.get("/api/temp/fast", (req, resp) => {
     let fastTokenInfo = getFastTempTimeToken(time_string, salt, createTime);
     resp.send(fastTokenInfo);
   }
+});
+
+app.get("/api/temp/finish", (req, resp) => {
+  if (
+    !req.query["token"] ||
+    !req.query["salt"] ||
+    !req.query["sec"] ||
+    !req.query["min"] ||
+    !req.query["fastproof"]
+  ) {
+    resp.send({ err: "Missing params in /temp/fast" });
+    return;
+  }
+
+  //verifyFastTempToken(time_string, salt, sec, minute, fastproof)
 });
 
 const DEFAULT_UNLOCK_WINDOW_MIN = 15;
