@@ -1,1 +1,1 @@
-module.exports = { version: "*v3 10.10 temp pass*" };
+module.exports = { version: "*v3 24.10 temp pass*" };
