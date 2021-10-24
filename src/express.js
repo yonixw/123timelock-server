@@ -94,59 +94,6 @@ function getTimeEndedProof(salt, timeStart, timeEnd, enc_data) {
   );
 }
 
-function getTempTimeToken(time_string, salt, timeCreated) {
-  // long token to help you proove you had the key (token) in time X
-  let hmac = encryptor.hmac("temp_" + salt + time_string + timeCreated);
-  return "temp_" + hmac;
-}
-
-function getISOMin(d) {
-  // '2021-10-11T19:03:14.619Z' -> '2021-10-11T19:03'
-  return d.toISOString().split(/:[0-9]{2}\./)[0];
-}
-
-function getFastTempTimeToken(time_string, salt, timeCreated) {
-  // short text to copy to other device that will work for 2 minute
-  // after you show the temp proof
-  let now = new Date();
-
-  let secDiff = ((((now.getDate() - timeCreated) % 60) * 1000) / 60) * 1000;
-  let minDiff = Math.floor(
-    ((now.getDate() - timeCreated - secDiff * 60 * 1000) / 60) * 60 * 1000
-  );
-
-  let sec = padDigits(secDiff, 2);
-  let minute = padDigits(minDiff, 2);
-
-  let fastTempProof = encryptor
-    .hmac([time_string, salt, sec, minute, getISOMin(now)].join("|"))
-    .substr(0, 6);
-
-  return {
-    secdiff: sec,
-    mindiff: minute,
-    fastproof: fastTempProof
-  };
-}
-
-const fastTempValidMin = 3;
-function verifyFastTempToken(time_string, salt, sec, minute, fastproof) {
-  let d = new Date();
-
-  let fastTempValid = false;
-  for (let i = 0; i < fastTempValidMin; i++) {
-    let expected_proof = encryptor
-      .hmac([time_string, salt, sec, minute, getISOMin(d)].join("|"))
-      .substr(0, 6);
-
-    if (expected_proof === fastproof) {
-      fastTempValid = true;
-    }
-  }
-
-  return fastTempValid;
-}
-
 app.get("/api/redirect", (rq, rs) => {
   rs.status(403).send({ err: "/api/redirect deprecated" });
 });
@@ -188,65 +135,6 @@ app.get("/api/enc", (req, resp) => {
   // 1) No lying about data_hash
   // 2) Use it to encrypt and throw away
   resp.send({ enckey: encDataArray });
-});
-
-app.get("/api/temp/begin", (req, resp) => {
-  if (!req.query["token"] || !req.query["tokenproof"] || !req.query["salt"]) {
-    resp.send({ err: "Missing params in /temp/begin" });
-    return;
-  }
-
-  const time_string = req.query["token"];
-  const time_token = req.query["tokenproof"];
-  const salt = req.query["salt"];
-
-  if (getTimeToken(salt, time_string) !== time_token) {
-    resp.send({ err: `Can't validate token: '${time_token}'` });
-  } else {
-    let createTime = Date.now();
-    let tempProof = getTempTimeToken(time_string, salt, createTime);
-
-    resp.send({ from: createTime, tempproof: tempProof });
-  }
-});
-
-app.get("/api/temp/fast", (req, resp) => {
-  if (
-    !req.query["token"] ||
-    !req.query["tempproof"] ||
-    !req.query["from"] ||
-    !req.query["salt"]
-  ) {
-    resp.send({ err: "Missing params in /temp/fast" });
-    return;
-  }
-
-  const time_string = req.query["token"];
-  const temp_token = req.query["tempproof"];
-  const createTime = req.query["from"];
-  const salt = req.query["salt"];
-
-  if (getTempTimeToken(time_string, salt, createTime) !== temp_token) {
-    resp.send({ err: `Can't validate temp token: '${temp_token}'` });
-  } else {
-    let fastTokenInfo = getFastTempTimeToken(time_string, salt, createTime);
-    resp.send(fastTokenInfo);
-  }
-});
-
-app.get("/api/temp/finish", (req, resp) => {
-  if (
-    !req.query["token"] ||
-    !req.query["salt"] ||
-    !req.query["sec"] ||
-    !req.query["min"] ||
-    !req.query["fastproof"]
-  ) {
-    resp.send({ err: "Missing params in /temp/fast" });
-    return;
-  }
-
-  //verifyFastTempToken(time_string, salt, sec, minute, fastproof)
 });
 
 const DEFAULT_UNLOCK_WINDOW_MIN = 15;
@@ -351,6 +239,65 @@ app.get("/api/unlock/finish", (req, resp) => {
 
 app.get("/api/", (req, resp) => {
   resp.send("my default home");
+});
+
+app.get("/api/temp/begin", (req, resp) => {
+  if (!req.query["token"] || !req.query["tokenproof"] || !req.query["salt"]) {
+    resp.send({ err: "Missing params in /temp/begin" });
+    return;
+  }
+
+  const time_string = req.query["token"];
+  const time_token = req.query["tokenproof"];
+  const salt = req.query["salt"];
+
+  if (getTimeToken(salt, time_string) !== time_token) {
+    resp.send({ err: `Can't validate token: '${time_token}'` });
+  } else {
+    let createTime = getISOMin(new Date());
+    let tempProof = getTempTimeToken(time_string, salt, createTime);
+
+    resp.send({ from: createTime, tempproof: tempProof });
+  }
+});
+
+app.get("/api/temp/fastcopy", (req, resp) => {
+  if (
+    !req.query["token"] ||
+    !req.query["tempproof"] ||
+    !req.query["from"] ||
+    !req.query["salt"]
+  ) {
+    resp.send({ err: "Missing params in /temp/fast" });
+    return;
+  }
+
+  const time_string = req.query["token"];
+  const temp_token = req.query["tempproof"];
+  const createTime = req.query["from"];
+  const salt = req.query["salt"];
+
+  if (getTempTimeToken(time_string, salt, createTime) !== temp_token) {
+    resp.send({ err: `Can't validate temp token: '${temp_token}'` });
+  } else {
+    let fastTokenInfo = getFastTempTimeToken(time_string, salt, createTime);
+    resp.send(fastTokenInfo);
+  }
+});
+
+app.get("/api/temp/unlock", (req, resp) => {
+  if (
+    !req.query["token"] ||
+    !req.query["salt"] ||
+    !req.query["sec"] ||
+    !req.query["min"] ||
+    !req.query["fastproof"]
+  ) {
+    resp.send({ err: "Missing params in /temp/fast" });
+    return;
+  }
+
+  //verifyFastTempToken(time_string, salt, sec, minute, fastproof)
 });
 
 module.exports = { app };
