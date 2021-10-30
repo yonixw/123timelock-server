@@ -7,6 +7,7 @@ const {
   getTimeToken,
   getTimeEndedProof
 } = require("./crypto");
+const prettyTime = require("pretty-ms");
 
 var express = require("express");
 var cookieParser = require("cookie-parser");
@@ -23,7 +24,18 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
-const prettyTime = require("pretty-ms");
+const rateLimit = require("express-rate-limit");
+const limiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 10,
+  keyGenerator: (req, res) => req.ip + (req.query["salt"] || "nosalt"),
+  statusCode: 200,
+  headers: false,
+  message: `{"err": "Too many requests, please wait a while"}`
+});
+
+//  apply to all requests
+app.use(limiter);
 
 app.get("/api/redirect", (rq, rs) => {
   rs.status(403).send({ err: "/api/redirect deprecated" });
@@ -71,55 +83,53 @@ app.get("/api/enc", (req, resp) => {
 const DEFAULT_UNLOCK_WINDOW_MIN = 15;
 // {enckey, token_time, token_hmac, salt} => {end_time,timed_proof = hmac(time,data_hash)}
 app.get("/api/unlock/begin", (req, resp) => {
-  setTimeout(() => {
-    if (
-      !req.query["enckey"] ||
-      !req.query["token"] ||
-      !req.query["tokenproof"] ||
-      !req.query["offsetstartmin"] ||
-      !req.query["duration"] ||
-      !req.query["salt"]
-    ) {
-      resp.send({ err: "Missing params in /unlock/begin" });
-      return;
-    }
-    const enckey = fromSafeURL(req.query["enckey"]);
-    const time_string = req.query["token"];
-    const time_token = req.query["tokenproof"];
-    const offset_strat_min = parseInt(req.query["offsetstartmin"], 10) || 0;
-    const duration =
-      parseInt(req.query["duration"], 10) || DEFAULT_UNLOCK_WINDOW_MIN;
-    const salt = req.query["salt"];
+  if (
+    !req.query["enckey"] ||
+    !req.query["token"] ||
+    !req.query["tokenproof"] ||
+    !req.query["offsetstartmin"] ||
+    !req.query["duration"] ||
+    !req.query["salt"]
+  ) {
+    resp.send({ err: "Missing params in /unlock/begin" });
+    return;
+  }
+  const enckey = fromSafeURL(req.query["enckey"]);
+  const time_string = req.query["token"];
+  const time_token = req.query["tokenproof"];
+  const offset_strat_min = parseInt(req.query["offsetstartmin"], 10) || 0;
+  const duration =
+    parseInt(req.query["duration"], 10) || DEFAULT_UNLOCK_WINDOW_MIN;
+  const salt = req.query["salt"];
 
-    console.log(
-      `>${salt}<, >${time_string}<, >${getTimeToken(
-        salt,
-        time_string
-      )}< , >${time_token}<`
+  console.log(
+    `>${salt}<, >${time_string}<, >${getTimeToken(
+      salt,
+      time_string
+    )}< , >${time_token}<`
+  );
+  if (getTimeToken(salt, time_string) !== time_token) {
+    resp.send({ err: `Can't validate token: '${time_token}'` });
+  } else {
+    let waitTimeMin = parseTimeSafeSec(time_string) / 60;
+
+    let startTime = new Date();
+    startTime.setMinutes(
+      startTime.getMinutes() + waitTimeMin + offset_strat_min
     );
-    if (getTimeToken(salt, time_string) !== time_token) {
-      resp.send({ err: `Can't validate token: '${time_token}'` });
-    } else {
-      let waitTimeMin = parseTimeSafeSec(time_string) / 60;
 
-      let startTime = new Date();
-      startTime.setMinutes(
-        startTime.getMinutes() + waitTimeMin + offset_strat_min
-      );
+    let endTime = new Date();
+    endTime.setMinutes(
+      endTime.getMinutes() + waitTimeMin + offset_strat_min + duration
+    );
 
-      let endTime = new Date();
-      endTime.setMinutes(
-        endTime.getMinutes() + waitTimeMin + offset_strat_min + duration
-      );
-
-      let timeProof = getTimeEndedProof(salt, startTime, endTime, enckey);
-      resp.send({
-        from: startTime.getTime(),
-        to: endTime.getTime(),
-        proof: timeProof
-      });
-    }
-  }, 0.5 * 1000 /* Cooldown 5 sec against bruteforce short hash */);
+    let timeProof = getTimeEndedProof(salt, startTime, endTime, enckey);
+    resp.send({
+      from: startTime.getTime(),
+      to: endTime.getTime(),
+      proof: timeProof
+    });
+  }
 });
 
 // {enckey,end_time,timed_proof, salt} => key
