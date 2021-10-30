@@ -3,8 +3,7 @@ const { hmac, getTimeToken, getTimeEndedProof } = require("./crypto");
 
 function getTempTimeToken(time_string, salt, timeCreated) {
   // long token to help you proove you had the key (token) in time X
-  let hmac = hmac("temp_" + salt + time_string + timeCreated);
-  return "temp_" + hmac;
+  return "temp_" + hmac("temp_" + salt + time_string + timeCreated);
 }
 
 function getISOMin(d) {
@@ -28,19 +27,20 @@ function getFastTempTimeToken(time_string, salt, createTime) {
   // short text to copy to other device that will work for 2 minute
   // after you show the temp proof
   let now = new Date();
+  let nowInSec = Math.round((now.getTime() - createTime) / 1000);
+  let nowSecPart = nowInSec % 60;
+  let nowMinPartInSec = nowInSec - nowSecPart;
+  let nowMinPartInMin = nowMinPartInSec / 60;
 
-  let secDiff = ((((now.getDate() - createTime) % 60) * 1000) / 60) * 1000;
-  let minDiff = Math.floor(
-    ((now.getDate() - createTime - secDiff * 60 * 1000) / 60) * 60 * 1000
-  );
-
-  let minutePassed = padDigits(minDiff, 2);
+  let minutePassed = padDigits(nowMinPartInMin, 4);
 
   let fastCopyStamp = getISOMin(now);
 
   let fastTempProof = hmac(
     [time_string, salt, minutePassed, fastCopyStamp].join("|")
-  ).substr(0, 6);
+  )
+    .substr(0, 6)
+    .toUpperCase();
 
   return {
     mindiff: minutePassed, // minute the user waited since creation of timestamp
@@ -67,7 +67,7 @@ function createFastCopyTempTokenAPI(
   }
 }
 
-const fastCopyTempValidMin = 3;
+const fastCopyTempValidMin = 5;
 function verifyFastTempToken(time_string, salt, minutediff, fastproof) {
   let d = new Date();
 
@@ -75,7 +75,11 @@ function verifyFastTempToken(time_string, salt, minutediff, fastproof) {
   for (let i = 0; i < fastCopyTempValidMin; i++) {
     let expected_proof = hmac(
       [time_string, salt, minutediff, getISOMin(d)].join("|")
-    ).substr(0, 6);
+    )
+      .substr(0, 6)
+      .toUpperCase();
+
+    console.log(expected_proof, fastproof);
 
     if (expected_proof === fastproof) {
       fastTempValid = true;
@@ -99,14 +103,17 @@ function tempUnlockBeginAPI(
   if (!verifyFastTempToken(time_string, salt, minutediff, fastproof)) {
     callback({ err: `Can't validate fast copy proof '${fastproof}'` });
   } else {
-    let minutesToWait = parseTimeSafeSec(time_string) - minutediff;
+    let minutesToWait =
+      parseTimeSafeSec(time_string) / 60 - parseInt(minutediff, 10);
     if (minutesToWait < 1) minutesToWait = 1;
+
+    console.log(minutesToWait);
 
     let d = new Date();
     d.setMinutes(d.getMinutes() + minutesToWait);
-    let startTime = d.getTime();
+    let startTime = new Date(d.getTime());
     d.setMinutes(d.getMinutes() + duration);
-    let endTime = d.getTime();
+    let endTime = new Date(d.getTime());
 
     let timeProof = getTimeEndedProof(salt, startTime, endTime, enckey);
     callback({

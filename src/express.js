@@ -228,8 +228,7 @@ app.get("/api/temp/unlock", (req, resp) => {
     !req.query["salt"] ||
     !req.query["mindiff"] ||
     !req.query["fastproof"] ||
-    !req.query["enckey"] ||
-    !req.query["duration"]
+    !req.query["enckey"]
   ) {
     resp.send({ err: "Missing params in /temp/unlock" });
     return;
@@ -239,8 +238,9 @@ app.get("/api/temp/unlock", (req, resp) => {
   const salt = req.query["salt"];
   const minutediff = req.query["mindiff"];
   const fastproof = req.query["fastproof"];
-  const enckey = req.query["enckey"];
-  const duration = req.query["duration"];
+  const enckey = fromSafeURL(req.query["enckey"]);
+  const duration =
+    parseInt(req.query["duration"], 10) || DEFAULT_UNLOCK_WINDOW_MIN;
 
   tempUnlockBeginAPI(
     time_string,
