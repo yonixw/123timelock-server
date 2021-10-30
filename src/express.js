@@ -172,6 +172,12 @@ app.get("/api/", (req, resp) => {
   resp.send("my default home");
 });
 
+const {
+  tempTokenBeginAPI,
+  createFastCopyTempTokenAPI,
+  tempUnlockBeginAPI
+} = require("./temp-token");
+
 app.get("/api/temp/begin", (req, resp) => {
   if (!req.query["token"] || !req.query["tokenproof"] || !req.query["salt"]) {
     resp.send({ err: "Missing params in /temp/begin" });
@@ -182,7 +188,7 @@ app.get("/api/temp/begin", (req, resp) => {
   const time_token = req.query["tokenproof"];
   const salt = req.query["salt"];
 
-  //tempTokenBegin(salt, time_string, time_token, (e)=>resp.send(e));
+  tempTokenBeginAPI(salt, time_string, time_token, (e) => resp.send(e));
 });
 
 app.get("/api/temp/fastcopy", (req, resp) => {
@@ -192,7 +198,7 @@ app.get("/api/temp/fastcopy", (req, resp) => {
     !req.query["from"] ||
     !req.query["salt"]
   ) {
-    resp.send({ err: "Missing params in /temp/fast" });
+    resp.send({ err: "Missing params in /temp/fastcopy" });
     return;
   }
 
@@ -201,22 +207,40 @@ app.get("/api/temp/fastcopy", (req, resp) => {
   const createTime = req.query["from"];
   const salt = req.query["salt"];
 
-  //createFastCopyTempToken(time_string, salt, createTime, temp_token, resp);
+  createFastCopyTempTokenAPI(time_string, salt, createTime, temp_token, (e) =>
+    resp.send(e)
+  );
 });
 
 app.get("/api/temp/unlock", (req, resp) => {
   if (
     !req.query["token"] ||
     !req.query["salt"] ||
-    !req.query["sec"] ||
-    !req.query["min"] ||
-    !req.query["fastproof"]
+    !req.query["mindiff"] ||
+    !req.query["fastproof"] ||
+    !req.query["enckey"] ||
+    !req.query["duration"]
   ) {
-    resp.send({ err: "Missing params in /temp/fast" });
+    resp.send({ err: "Missing params in /temp/unlock" });
     return;
   }
 
-  //verifyFastTempToken(time_string, salt, sec, minute, fastproof)
+  const time_string = req.query["token"];
+  const salt = req.query["salt"];
+  const minutediff = req.query["mindiff"];
+  const fastproof = req.query["fastproof"];
+  const enckey = req.query["enckey"];
+  const duration = req.query["duration"];
+
+  tempUnlockBeginAPI(
+    time_string,
+    salt,
+    minutediff,
+    fastproof,
+    duration,
+    enckey,
+    (e) => resp.send(e)
+  );
 });
 
 module.exports = { app };
