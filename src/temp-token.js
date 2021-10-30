@@ -1,12 +1,9 @@
-function padDigits(number, digits) {
-  return (
-    Array(Math.max(digits - String(number).length + 1, 0)).join(0) + number
-  );
-}
+const { padDigits, parseTimeSafeSec } = require("./utils");
+const { hmac, getTimeToken, getTimeEndedProof } = require("./crypto");
 
-function getTempTimeToken(hmacFn, reqBody, time_string, salt, timeCreated) {
+function getTempTimeToken(time_string, salt, timeCreated) {
   // long token to help you proove you had the key (token) in time X
-  let hmac = hmacFn("temp_" + salt + time_string + timeCreated);
+  let hmac = hmac("temp_" + salt + time_string + timeCreated);
   return "temp_" + hmac;
 }
 
@@ -15,50 +12,113 @@ function getISOMin(d) {
   return d.toISOString().split(/:[0-9]{2}\./)[0];
 }
 
-function getFastTempTimeToken(hmacFn, reqBody, time_string, salt, timeCreated) {
+function tempTokenBeginAPI(salt, time_string, time_token, callback) {
+  if (getTimeToken(salt, time_string) !== time_token) {
+    callback({ err: `Can't validate time token: '${time_token}'` });
+  } else {
+    // This will be sent to us so exact date + long hash:
+    let createTime = Date.now();
+    let tempProof = getTempTimeToken(time_string, salt, createTime);
+
+    callback({ from: createTime, tempproof: tempProof });
+  }
+}
+
+function getFastTempTimeToken(time_string, salt, createTime) {
   // short text to copy to other device that will work for 2 minute
   // after you show the temp proof
   let now = new Date();
 
-  let secDiff = ((((now.getDate() - timeCreated) % 60) * 1000) / 60) * 1000;
+  let secDiff = ((((now.getDate() - createTime) % 60) * 1000) / 60) * 1000;
   let minDiff = Math.floor(
-    ((now.getDate() - timeCreated - secDiff * 60 * 1000) / 60) * 60 * 1000
+    ((now.getDate() - createTime - secDiff * 60 * 1000) / 60) * 60 * 1000
   );
 
-  let minute = padDigits(minDiff, 2);
+  let minutePassed = padDigits(minDiff, 2);
 
-  let fastTempProof = hmacFn(
-    [time_string, salt, minute, getISOMin(now)].join("|")
+  let fastCopyStamp = getISOMin(now);
+
+  let fastTempProof = hmac(
+    [time_string, salt, minutePassed, fastCopyStamp].join("|")
   ).substr(0, 6);
 
   return {
-    mindiff: minute,
+    mindiff: minutePassed, // minute the user waited since creation of timestamp
     fastproof: fastTempProof
   };
 }
 
-const fastTempValidMin = 3;
-function verifyFastTempToken(
-  hmacFn,
-  reqBody,
+function createFastCopyTempTokenAPI(
   time_string,
   salt,
-  sec,
-  minute,
-  fastproof
+  createTime,
+  temp_token,
+  callback
 ) {
+  if (getTempTimeToken(time_string, salt, createTime) !== temp_token) {
+    callback({ err: `Can't validate temp token: '${temp_token}'` });
+  } else {
+    let fastTokenInfo = getFastTempTimeToken(
+      time_string,
+      salt,
+      parseInt(createTime, 10)
+    );
+    callback(fastTokenInfo);
+  }
+}
+
+const fastCopyTempValidMin = 3;
+function verifyFastTempToken(time_string, salt, minutediff, fastproof) {
   let d = new Date();
 
   let fastTempValid = false;
-  for (let i = 0; i < fastTempValidMin; i++) {
-    let expected_proof = hmacFn(
-      [time_string, salt, sec, minute, getISOMin(d)].join("|")
+  for (let i = 0; i < fastCopyTempValidMin; i++) {
+    let expected_proof = hmac(
+      [time_string, salt, minutediff, getISOMin(d)].join("|")
     ).substr(0, 6);
 
     if (expected_proof === fastproof) {
       fastTempValid = true;
     }
+
+    d.setMinutes(d.getMinutes() - 1); // Go back 1 minute.
   }
 
   return fastTempValid;
 }
+
+function tempUnlockBeginAPI(
+  time_string,
+  salt,
+  minutediff,
+  fastproof,
+  duration,
+  enckey,
+  callback
+) {
+  if (!verifyFastTempToken(time_string, salt, minutediff, fastproof)) {
+    callback({ err: `Can't validate fast copy proof '${fastproof}'` });
+  } else {
+    let minutesToWait = parseTimeSafeSec(time_string) - minutediff;
+    if (minutesToWait < 1) minutesToWait = 1;
+
+    let d = new Date();
+    d.setMinutes(d.getMinutes() + minutesToWait);
+    let startTime = d.getTime();
+    d.setMinutes(d.getMinutes() + duration);
+    let endTime = d.getTime();
+
+    let timeProof = getTimeEndedProof(salt, startTime, endTime, enckey);
+    callback({
+      from: startTime.getTime(),
+      to: endTime.getTime(),
+      proof: timeProof
+    });
+  }
+}
+
+module.exports = {
+  tempTokenBeginAPI,
+  createFastCopyTempTokenAPI,
+  tempUnlockBeginAPI
+};

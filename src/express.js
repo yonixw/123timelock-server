@@ -1,5 +1,14 @@
+const { toSafeURL, fromSafeURL, parseTimeSafeSec } = require("./utils");
+const {
+  hmac,
+  encrypt,
+  decrypt,
+  genSalt,
+  getTimeToken,
+  getTimeEndedProof
+} = require("./crypto");
+
 var express = require("express");
-var path = require("path");
 var cookieParser = require("cookie-parser");
 var logger = require("morgan");
 
@@ -14,85 +23,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
-const key = process.env.KEY; // echo "$(< /dev/urandom tr -dc A-Za-z0-9 | head -c 64)"
-const encryptor = require("simple-encryptor")(key);
-const parseTime = require("parse-duration");
 const prettyTime = require("pretty-ms");
-
-function randString(length) {
-  var result = [];
-  var characters = "abcdefghijklmnopqrstuvwxyz0123456789";
-  var charactersLength = characters.length;
-  for (var i = 0; i < length; i++) {
-    result.push(
-      characters.charAt(Math.floor(Math.random() * charactersLength))
-    );
-  }
-  return result.join("");
-}
-
-function parseTimeSafeSec(e) {
-  return Math.max(parseTime(e) || 60 * 1000, 60 * 1000) / 1000;
-}
-
-function toSafeURL(text) {
-  return text.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "~");
-}
-
-function fromSafeURL(text) {
-  return text.replace(/-/g, "+").replace(/_/g, "/").replace(/~/g, "=");
-}
-
-function addInLast(str, n = 6) {
-  return str.substr(0, str.length - n) + "_" + str.substr(str.length - n);
-}
-
-function padDigits(number, digits) {
-  return (
-    Array(Math.max(digits - String(number).length + 1, 0)).join(0) + number
-  );
-}
-
-function reverse(str) {
-  return [...str].reduce((rev, currentChar) => currentChar + rev, "");
-}
-
-function genSalt() {
-  //const salt = `${Date.now()}_${randString(10)}`;
-  const salt = Date.now()
-    .toString()
-    .substr(0, 8)
-    .split("")
-    .map((e, i) => (i % 5 == 4 ? e + "_" : e))
-    .join("");
-  return "salt_" + salt + "_" + Math.ceil(Math.random() * 100000);
-}
-
-function getTimeToken(salt, time_string) {
-  let hmac = encryptor.hmac("token_" + salt + parseTimeSafeSec(time_string));
-
-  return (
-    "token_" +
-    hmac
-      .substr(0, 10)
-      .split("")
-      .map((e, i) => (i % 5 == 4 ? e + "_" : e))
-      .join("") +
-    padDigits(
-      parseInt(reverse(hmac.replace(/[a-z]/gi, "")).substr(0, 5), 10) || 0,
-      5
-    )
-  );
-}
-
-function getTimeEndedProof(salt, timeStart, timeEnd, enc_data) {
-  return (
-    "begintime_" +
-    encryptor.hmac(
-      `begintime_${salt}|${timeStart.getTime()}|${timeEnd.getTime()}|${enc_data}`
-    )
-  );
-}
 
 app.get("/api/redirect", (rq, rs) => {
   rs.status(403).send({ err: "/api/redirect deprecated" });
@@ -128,7 +59,7 @@ app.get("/api/enc", (req, resp) => {
   if (!Array.isArray(req.query["salts"])) salts = [`${salts}`];
 
   const encDataArray = salts.map((s) =>
-    toSafeURL(encryptor.encrypt(JSON.stringify({ p: pass, s: s })))
+    toSafeURL(encrypt(JSON.stringify({ p: pass, s: s })))
   );
 
   // This assume good intentions when encrypting
@@ -216,7 +147,7 @@ app.get("/api/unlock/finish", (req, resp) => {
     const nowTime = new Date();
 
     if (timeStart < nowTime && nowTime < timeEnd) {
-      const keyData = JSON.parse(encryptor.decrypt(enckey));
+      const keyData = JSON.parse(decrypt(enckey));
       //
 
       if ((keyData.salt || keyData.s) === salt) {
@@ -251,14 +182,7 @@ app.get("/api/temp/begin", (req, resp) => {
   const time_token = req.query["tokenproof"];
   const salt = req.query["salt"];
 
-  if (getTimeToken(salt, time_string) !== time_token) {
-    resp.send({ err: `Can't validate token: '${time_token}'` });
-  } else {
-    let createTime = getISOMin(new Date());
-    let tempProof = getTempTimeToken(time_string, salt, createTime);
-
-    resp.send({ from: createTime, tempproof: tempProof });
-  }
+  //tempTokenBegin(salt, time_string, time_token, (e)=>resp.send(e));
 });
 
 app.get("/api/temp/fastcopy", (req, resp) => {
@@ -277,12 +201,7 @@ app.get("/api/temp/fastcopy", (req, resp) => {
   const createTime = req.query["from"];
   const salt = req.query["salt"];
 
-  if (getTempTimeToken(time_string, salt, createTime) !== temp_token) {
-    resp.send({ err: `Can't validate temp token: '${temp_token}'` });
-  } else {
-    let fastTokenInfo = getFastTempTimeToken(time_string, salt, createTime);
-    resp.send(fastTokenInfo);
-  }
+  //createFastCopyTempToken(time_string, salt, createTime, temp_token, resp);
 });
 
 app.get("/api/temp/unlock", (req, resp) => {
