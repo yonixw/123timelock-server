@@ -11,7 +11,7 @@ function genSalt() {
     .split("")
     .map((e, i) => (i % 5 == 4 ? e + "_" : e))
     .join("");
-  return "salt_" + salt + "_" + Math.ceil(Math.random() * 100000);
+  return "salt_" + salt + "_" + Math.ceil((Math.random() * (100*1000 - 10*1000))+10*1000);
 }
 
 function getTimeToken(salt, time_string) {
