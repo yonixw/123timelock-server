@@ -150,6 +150,11 @@ app.get("/api/unlock/finish", (req, resp) => {
   const timeProof = req.query["proof"];
   const salt = req.query["salt"];
 
+  // Optional 2-step hash
+  const hashType = req.query["hashtype"] || "";
+  const hashState = req.query["hashstate"] || "";
+  const hashServerSecret = req.query["hashsecret"] || "";
+
   let calcTimeProof = getTimeEndedProof(salt, timeStart, timeEnd, enckey);
   if (calcTimeProof !== timeProof) {
     resp.send({ err: `Can't validate proof: '${timeProof}'` });
@@ -159,11 +164,20 @@ app.get("/api/unlock/finish", (req, resp) => {
     if (timeStart < nowTime && nowTime < timeEnd) {
       const keyData = JSON.parse(decrypt(enckey));
       //
-
       if ((keyData.salt || keyData.s) === salt) {
+        let hashNextState = undefined;
+        if (hashType && hashState && hashServerSecret) {
+          // Same pass for partial hash
+          let hashKeyPlain = decrypt(hashServerSecret);
+
+          if (hashType == "sha256")
+            hashNextState = hash256Step(hashKeyPlain, hashState);
+        }
+
         resp.send({
           pass: keyData.pass || keyData.p || "error-no-pass-key",
-          timeLeftOpen: prettyTime(timeEnd - nowTime)
+          timeLeftOpen: prettyTime(timeEnd - nowTime),
+          hash: hashNextState
         });
       } else {
         resp.send({
@@ -187,6 +201,7 @@ const {
   createFastCopyTempTokenAPI,
   tempUnlockBeginAPI
 } = require("./temp-token");
+const { hash256Step } = require("./cryptolib/cryptoUtils");
 
 app.get("/api/temp/begin", (req, resp) => {
   if (!req.query["token"] || !req.query["tokenproof"] || !req.query["salt"]) {
