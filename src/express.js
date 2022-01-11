@@ -3,6 +3,8 @@ const {
   hmac,
   encrypt,
   decrypt,
+  keydecrypt,
+  keyencrypt,
   genSalt,
   getTimeToken,
   getTimeEndedProof
@@ -78,6 +80,32 @@ app.get("/api/enc", (req, resp) => {
   // 1) No lying about data_hash
   // 2) Use it to encrypt and throw away
   resp.send({ enckey: encDataArray });
+});
+
+// {pass,hashparts[]} => [enc(hashparts, password = pass+secret)]
+app.get("/api/enchash", (req, resp) => {
+  // Because we will only decrypt if password is
+  // proven to be time unlocked, the user has no incentive
+  // to enter a different random password...
+  // because no time free password will work since it doesnt have
+  // proof of unlock..
+
+  if (!req.query["hashparts"] || !req.query["pass"]) {
+    resp.send({ err: "Missing params in /enchash " });
+    return;
+  }
+
+  const pass = req.query["pass"];
+
+  // Encrypt hashs without depending on salt..
+  let hashpartsResult = [];
+  if (req.query["hashparts"]) {
+    let hashparts = req.query["hashparts"];
+    if (!Array.isArray(req.query["hashparts"])) hashparts = [`${hashparts}`];
+    hashpartsResult = hashparts.map((e) => keyencrypt(`${e}`, pass));
+  }
+
+  resp.send({ encparts: hashpartsResult });
 });
 
 const DEFAULT_UNLOCK_WINDOW_MIN = 15;
@@ -167,15 +195,18 @@ app.get("/api/unlock/finish", (req, resp) => {
       const keyData = JSON.parse(decrypt(enckey));
       //
       if ((keyData.salt || keyData.s) === salt) {
+        const password = keyData.pass || keyData.p || "error-no-pass-key";
+
         let hashNextState = "";
-        if (hashType && hashState && hashServerSecret) {
+        if (!!hashType && hashType !== "undefined") {
+          console.log({ hashType, hashState, hashServerSecret });
           // Same pass for partial hash
-          let hashKeyPlain = decrypt(hashServerSecret);
+          let hashKeyPlain = keydecrypt(hashServerSecret, password);
           hashNextState = hashStep(hashKeyPlain, hashType, hashState);
         }
 
         resp.send({
-          pass: keyData.pass || keyData.p || "error-no-pass-key",
+          pass: password,
           timeLeftOpen: prettyTime(timeEnd - nowTime),
           hashstep: hashNextState
         });

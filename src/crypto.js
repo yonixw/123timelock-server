@@ -1,7 +1,8 @@
 const { padDigits, reverse, parseTimeSafeSec } = require("./utils");
 
+const _simpleenc = require("simple-encryptor");
 const key = process.env.KEY; // echo "$(< /dev/urandom tr -dc A-Za-z0-9 | head -c 64)"
-const encryptor = require("simple-encryptor")(key);
+const encryptor = _simpleenc(key);
 
 function genSalt() {
   //const salt = `${Date.now()}_${randString(10)}`;
@@ -11,7 +12,12 @@ function genSalt() {
     .split("")
     .map((e, i) => (i % 5 == 4 ? e + "_" : e))
     .join("");
-  return "salt_" + salt + "_" + Math.ceil((Math.random() * (100*1000 - 10*1000))+10*1000);
+  return (
+    "salt_" +
+    salt +
+    "_" +
+    Math.ceil(Math.random() * (100 * 1000 - 10 * 1000) + 10 * 1000)
+  );
 }
 
 function getTimeToken(salt, time_string) {
@@ -40,11 +46,23 @@ function getTimeEndedProof(salt, timeStart, timeEnd, enc_data) {
   );
 }
 
+function keyencrypt(data, encKey) {
+  const encryptor = _simpleenc("hashstep" + key + encKey);
+  return encryptor.encrypt(data);
+}
+
+function keydecrypt(chiper, encKey) {
+  const encryptor = _simpleenc("hashstep" + key + encKey);
+  return encryptor.decrypt(chiper);
+}
+
 module.exports = {
   encryptor: encryptor,
   hmac: encryptor.hmac,
   encrypt: encryptor.encrypt,
   decrypt: encryptor.decrypt,
+  keyencrypt,
+  keydecrypt,
   genSalt,
   getTimeToken,
   getTimeEndedProof
