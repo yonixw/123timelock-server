@@ -199,10 +199,25 @@ app.get("/api/unlock/finish", (req, resp) => {
 
         let hashNextState = "";
         if (!!hashType && hashType !== "undefined") {
-          console.log({ hashType, hashState, hashServerSecret });
-          // Same pass for partial hash
-          let hashKeyPlain = keydecrypt(hashServerSecret, password);
-          hashNextState = hashStep(hashKeyPlain, hashType, hashState);
+          if (hashType == "otpSha1") {
+            let hashKeyPlain = keydecrypt(hashServerSecret, password); // array of bits
+            let mac_outkey = JSON.parse(hashKeyPlain);
+            let digestBitsParts = JSON.parse(hashState);
+            if (digestBitsParts.length > 5) {
+              hashNextState = hashStep(mac_outkey, hashType, null);
+              hashNextState = hashStep(
+                digestBitsParts,
+                hashType,
+                hashNextState
+              );
+            } else {
+              hashNextState = "digest must be 5 byte least";
+            }
+          } else {
+            // Same pass for partial hash
+            let hashKeyPlain = keydecrypt(hashServerSecret, password);
+            hashNextState = hashStep(hashKeyPlain, hashType, hashState);
+          }
         }
 
         resp.send({
