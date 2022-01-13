@@ -193,6 +193,10 @@ function unlockSuccessHash(
   let hashNextState = "";
   if (!!hashType && hashType !== "undefined") {
     // Same pass for partial hash
+    // Assume client hash smart like
+    //    (code + key_client1 + key_server + key_client2)
+    //    so client can't abuse us to get state and remember
+    //    like in case of (server_key + client_key + code)
     let hashKeyPlain = keydecrypt(hashServerSecret, password);
     hashNextState = hashStep(hashKeyPlain, hashType, hashState);
   }
@@ -203,23 +207,51 @@ function unlockSuccessHash(
   });
 }
 
-/*
-if (hashType == "otpSha1") {
-      let hashKeyPlain = keydecrypt(hashServerSecret, password); // array of bits
-      let mac_outkey = JSON.parse(hashKeyPlain);
-      let digestBitsParts = JSON.parse(hashState);
-      if (digestBitsParts.length > 5) {
-        hashNextState = hashStep(mac_outkey, hashType, null);
-        hashNextState = hashStep(digestBitsParts, hashType, hashNextState);
-      } else {
-        hashNextState = "digest must be 5 byte least";
-      }
-*/
+function unlockSuccessOTP(
+  query,
+  password,
+  timeEnd,
+  nowTime,
+  sendResult,
+  extraProps = {}
+) {
+  // Optional 2-step hash
+  const hashType = query["hashtype"] || "";
+  const hashState = query["hashstate"] || "";
+  const hashServerSecret = query["hashsecret"] || "";
+  const hashExtra = query["hashextra"] || "";
+
+  let hashNextState = "";
+  if (!!hashType && hashType !== "undefined") {
+    // Same pass for partial hash
+    // Assume client hash smart like
+    //    (code + key_client1 + key_server + key_client2)
+    //    so client can't abuse us to get state and remember
+    //    like in case of (server_key + client_key + code)
+    let hashKeyPlain = keydecrypt(hashServerSecret, password);
+
+    // Assume both array of bits
+    const hashKeyBits = JSON.parse(hashKeyPlain || "[]");
+    const hashExtraBits = JSON.parse(hashExtra || "[]");
+
+    if (hashKeyBits.length < 5 || hashExtra.length < 5) {
+      sendResult({ err: "Both key & data must be non empty arrays" });
+    } else {
+      hashNextState = hashStep(hashKeyBits, hashType, hashState);
+      hashNextState = hashStep(hashExtraBits, hashType, hashNextState);
+
+      unlockSuccessSimple(query, password, timeEnd, nowTime, sendResult, {
+        password: "<hash-only>",
+        hashstep: hashNextState
+      });
+    }
+  }
+}
 
 const unlockSucessCB = {
   simple: unlockSuccessSimple,
   "sha-step": unlockSuccessHash,
-  "otp-step": null
+  "otp-step": unlockSuccessOTP
 };
 
 // {enckey,end_time,timed_proof, salt} => key
