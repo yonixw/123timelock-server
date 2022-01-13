@@ -15,6 +15,8 @@ var express = require("express");
 var cookieParser = require("cookie-parser");
 var logger = require("morgan");
 
+const { hashStep } = require("./cryptolib/cryptoUtils");
+
 var app = express();
 
 app.use((req, res, next) => {
@@ -29,8 +31,8 @@ app.use(cookieParser());
 const rateLimit = require("express-rate-limit");
 const limiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 10,
-  keyGenerator: (req, res) => req.ip + (req.query["salt"] || "nosalt"),
+  max: 20,
+  keyGenerator: (req, res) => req.ip,
   statusCode: 200,
   headers: false,
   message: `{"err": "Too many requests, please wait a while"}`
@@ -160,7 +162,65 @@ app.get("/api/unlock/begin", (req, resp) => {
   }
 });
 
-const { hashStep } = require("./cryptolib/cryptoUtils");
+function unlockSuccessSimple(
+  query,
+  password,
+  timeEnd,
+  nowTime,
+  sendResult,
+  extraProps = {}
+) {
+  sendResult({
+    pass: password,
+    timeLeftOpen: prettyTime(timeEnd - nowTime),
+    ...extraProps
+  });
+}
+
+function unlockSuccessHash(
+  query,
+  password,
+  timeEnd,
+  nowTime,
+  sendResult,
+  extraProps = {}
+) {
+  // Optional 2-step hash
+  const hashType = query["hashtype"] || "";
+  const hashState = query["hashstate"] || "";
+  const hashServerSecret = query["hashsecret"] || "";
+
+  let hashNextState = "";
+  if (!!hashType && hashType !== "undefined") {
+    // Same pass for partial hash
+    let hashKeyPlain = keydecrypt(hashServerSecret, password);
+    hashNextState = hashStep(hashKeyPlain, hashType, hashState);
+  }
+
+  unlockSuccessSimple(query, password, timeEnd, nowTime, sendResult, {
+    password: "<hash-only>",
+    hashstep: hashNextState
+  });
+}
+
+/*
+if (hashType == "otpSha1") {
+      let hashKeyPlain = keydecrypt(hashServerSecret, password); // array of bits
+      let mac_outkey = JSON.parse(hashKeyPlain);
+      let digestBitsParts = JSON.parse(hashState);
+      if (digestBitsParts.length > 5) {
+        hashNextState = hashStep(mac_outkey, hashType, null);
+        hashNextState = hashStep(digestBitsParts, hashType, hashNextState);
+      } else {
+        hashNextState = "digest must be 5 byte least";
+      }
+*/
+
+const unlockSucessCB = {
+  simple: unlockSuccessSimple,
+  "sha-step": unlockSuccessHash,
+  "otp-step": null
+};
 
 // {enckey,end_time,timed_proof, salt} => key
 app.get("/api/unlock/finish", (req, resp) => {
@@ -174,16 +234,13 @@ app.get("/api/unlock/finish", (req, resp) => {
     resp.send({ err: "Missing params in /unlock/finsih" });
     return;
   }
+  const mode = req.query["mode"] || "simple"; // optional hash\otp step based on password
+
   const enckey = fromSafeURL(req.query["enckey"]);
   const timeStart = new Date(parseInt(req.query["from"] || "0", 10));
   const timeEnd = new Date(parseInt(req.query["to"] || "0", 10));
   const timeProof = req.query["proof"];
   const salt = req.query["salt"];
-
-  // Optional 2-step hash
-  const hashType = req.query["hashtype"] || "";
-  const hashState = req.query["hashstate"] || "";
-  const hashServerSecret = req.query["hashsecret"] || "";
 
   let calcTimeProof = getTimeEndedProof(salt, timeStart, timeEnd, enckey);
   if (calcTimeProof !== timeProof) {
@@ -196,35 +253,9 @@ app.get("/api/unlock/finish", (req, resp) => {
       //
       if ((keyData.salt || keyData.s) === salt) {
         const password = keyData.pass || keyData.p || "error-no-pass-key";
+        const sendResult = (obj) => resp.send(obj);
 
-        let hashNextState = "";
-        if (!!hashType && hashType !== "undefined") {
-          if (hashType == "otpSha1") {
-            let hashKeyPlain = keydecrypt(hashServerSecret, password); // array of bits
-            let mac_outkey = JSON.parse(hashKeyPlain);
-            let digestBitsParts = JSON.parse(hashState);
-            if (digestBitsParts.length > 5) {
-              hashNextState = hashStep(mac_outkey, hashType, null);
-              hashNextState = hashStep(
-                digestBitsParts,
-                hashType,
-                hashNextState
-              );
-            } else {
-              hashNextState = "digest must be 5 byte least";
-            }
-          } else {
-            // Same pass for partial hash
-            let hashKeyPlain = keydecrypt(hashServerSecret, password);
-            hashNextState = hashStep(hashKeyPlain, hashType, hashState);
-          }
-        }
-
-        resp.send({
-          pass: password,
-          timeLeftOpen: prettyTime(timeEnd - nowTime),
-          hashstep: hashNextState
-        });
+        unlockSucessCB[mode](req.query, password, timeEnd, nowTime, sendResult);
       } else {
         resp.send({
           err: "Salt of encrypted data mismatch!"
