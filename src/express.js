@@ -100,6 +100,8 @@ app.get("/api/enchash", (req, resp) => {
   const pass = req.query["pass"];
 
   // Encrypt hashs without depending on salt..
+  // keyencrypt() uses our severKey so user can't unlock even
+  //    if saving tempPass in textplain
   let hashpartsResult = [];
   if (req.query["hashparts"]) {
     let hashparts = req.query["hashparts"];
