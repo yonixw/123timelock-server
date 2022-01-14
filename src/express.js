@@ -41,6 +41,37 @@ const limiter = rateLimit({
 //  apply to all requests
 app.use(limiter);
 
+const safeB64Pairs = [
+  // Including premaid regexes
+  [
+    ["+", /\+/g],
+    ["-", /-/g]
+  ],
+  [
+    ["/", /\//g],
+    ["_", /_/g]
+  ],
+  [
+    ["=", /=/g],
+    [".", /\./g]
+  ]
+];
+
+function makeSafeB64_32(b64string) {
+  let result = b64string || "";
+  safeB64Pairs.forEach((p) => {
+    result = result.replace(p[0][1], p[1][0]);
+  });
+  return result;
+}
+function undoSafeB64_32(b64string) {
+  let result = b64string || "";
+  safeB64Pairs.forEach((p) => {
+    result = result.replace(p[1][1], p[0][0]);
+  });
+  return result;
+}
+
 app.get("/api/redirect", (rq, rs) => {
   rs.status(403).send({ err: "/api/redirect deprecated" });
 });
@@ -219,7 +250,7 @@ function unlockSuccessOTP(
 ) {
   // Optional 2-step hash
   const hashType = query["hashtype"] || "";
-  const hashServerSecret = query["hashsecret"] || "";
+  const hashServerSecret = undoSafeB64_32(query["hashsecret"] || "");
   const hashExtra = query["hashextra"] || "";
 
   let hashNextState = "";
