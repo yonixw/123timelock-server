@@ -219,7 +219,6 @@ function unlockSuccessOTP(
 ) {
   // Optional 2-step hash
   const hashType = query["hashtype"] || "";
-  const hashState = query["hashstate"] || "";
   const hashServerSecret = query["hashsecret"] || "";
   const hashExtra = query["hashextra"] || "";
 
@@ -239,7 +238,7 @@ function unlockSuccessOTP(
     if (hashKeyBits.length < 5 || hashExtra.length < 5) {
       sendResult({ err: "Both key & data must be non empty arrays" });
     } else {
-      hashNextState = hashStep(hashKeyBits, hashType, hashState);
+      hashNextState = hashStep(hashKeyBits, hashType, null);
       hashNextState = hashStep(hashExtraBits, hashType, hashNextState);
 
       unlockSuccessSimple(query, password, timeEnd, nowTime, sendResult, {
