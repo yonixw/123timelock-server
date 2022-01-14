@@ -204,7 +204,7 @@ function unlockSuccessHash(
   }
 
   unlockSuccessSimple(query, password, timeEnd, nowTime, sendResult, {
-    password: "<hash-only>",
+    pass: "<hash-only>",
     hashstep: hashNextState
   });
 }
@@ -235,14 +235,15 @@ function unlockSuccessOTP(
     const hashKeyBits = JSON.parse(hashKeyPlain || "[]");
     const hashExtraBits = JSON.parse(hashExtra || "[]");
 
-    if (hashKeyBits.length < 5 || hashExtra.length < 5) {
+    console.log({ hashKeyPlain, hashKeyBits, hashExtraBits });
+    if (hashKeyBits.length < 2 || hashExtra.length < 2) {
       sendResult({ err: "Both key & data must be non empty arrays" });
     } else {
       hashNextState = hashStep(hashKeyBits, hashType, null);
       hashNextState = hashStep(hashExtraBits, hashType, hashNextState);
 
       unlockSuccessSimple(query, password, timeEnd, nowTime, sendResult, {
-        password: "<hash-only>",
+        pass: "<hash-only>",
         hashstep: hashNextState
       });
     }
