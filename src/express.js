@@ -3,6 +3,8 @@ const {
   hmac,
   encrypt,
   decrypt,
+  keydecrypt,
+  keyencrypt,
   genSalt,
   getTimeToken,
   getTimeEndedProof
@@ -12,6 +14,8 @@ const prettyTime = require("pretty-ms");
 var express = require("express");
 var cookieParser = require("cookie-parser");
 var logger = require("morgan");
+
+const { hashStep } = require("./cryptolib/cryptoUtils");
 
 var app = express();
 
@@ -27,8 +31,8 @@ app.use(cookieParser());
 const rateLimit = require("express-rate-limit");
 const limiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 10,
-  keyGenerator: (req, res) => req.ip + (req.query["salt"] || "nosalt"),
+  max: 20,
+  keyGenerator: (req, res) => req.ip,
   statusCode: 200,
   headers: false,
   message: `{"err": "Too many requests, please wait a while"}`
@@ -36,6 +40,37 @@ const limiter = rateLimit({
 
 //  apply to all requests
 app.use(limiter);
+
+const safeB64Pairs = [
+  // Including premaid regexes
+  [
+    ["+", /\+/g],
+    ["-", /-/g]
+  ],
+  [
+    ["/", /\//g],
+    ["_", /_/g]
+  ],
+  [
+    ["=", /=/g],
+    [".", /\./g]
+  ]
+];
+
+function makeSafeB64_32(b64string) {
+  let result = b64string || "";
+  safeB64Pairs.forEach((p) => {
+    result = result.replace(p[0][1], p[1][0]);
+  });
+  return result;
+}
+function undoSafeB64_32(b64string) {
+  let result = b64string || "";
+  safeB64Pairs.forEach((p) => {
+    result = result.replace(p[1][1], p[0][0]);
+  });
+  return result;
+}
 
 app.get("/api/redirect", (rq, rs) => {
   rs.status(403).send({ err: "/api/redirect deprecated" });
@@ -78,6 +113,34 @@ app.get("/api/enc", (req, resp) => {
   // 1) No lying about data_hash
   // 2) Use it to encrypt and throw away
   resp.send({ enckey: encDataArray });
+});
+
+// {pass,hashparts[]} => [enc(hashparts, password = pass+secret)]
+app.get("/api/enchash", (req, resp) => {
+  // Because we will only decrypt if password is
+  // proven to be time unlocked, the user has no incentive
+  // to enter a different random password...
+  // because no time free password will work since it doesnt have
+  // proof of unlock..
+
+  if (!req.query["hashparts"] || !req.query["pass"]) {
+    resp.send({ err: "Missing params in /enchash " });
+    return;
+  }
+
+  const pass = req.query["pass"];
+
+  // Encrypt hashs without depending on salt..
+  // keyencrypt() uses our severKey so user can't unlock even
+  //    if saving tempPass in textplain
+  let hashpartsResult = [];
+  if (req.query["hashparts"]) {
+    let hashparts = req.query["hashparts"];
+    if (!Array.isArray(req.query["hashparts"])) hashparts = [`${hashparts}`];
+    hashpartsResult = hashparts.map((e) => keyencrypt(`${e}`, pass));
+  }
+
+  resp.send({ encparts: hashpartsResult });
 });
 
 const DEFAULT_UNLOCK_WINDOW_MIN = 15;
@@ -132,6 +195,98 @@ app.get("/api/unlock/begin", (req, resp) => {
   }
 });
 
+function unlockSuccessSimple(
+  query,
+  password,
+  timeEnd,
+  nowTime,
+  sendResult,
+  extraProps = {}
+) {
+  sendResult({
+    pass: password,
+    timeLeftOpen: prettyTime(timeEnd - nowTime),
+    ...extraProps
+  });
+}
+
+function unlockSuccessHash(
+  query,
+  password,
+  timeEnd,
+  nowTime,
+  sendResult,
+  extraProps = {}
+) {
+  // Optional 2-step hash
+  const hashType = query["hashtype"] || "";
+  const hashState = query["hashstate"] || "";
+  const hashServerSecret = query["hashsecret"] || "";
+
+  let hashNextState = "";
+  if (!!hashType && hashType !== "undefined") {
+    // Same pass for partial hash
+    // Assume client hash smart like
+    //    (code + key_client1 + key_server + key_client2)
+    //    so client can't abuse us to get state and remember
+    //    like in case of (server_key + client_key + code)
+    let hashKeyPlain = keydecrypt(hashServerSecret, password);
+    hashNextState = hashStep(hashKeyPlain, hashType, hashState);
+  }
+
+  unlockSuccessSimple(query, password, timeEnd, nowTime, sendResult, {
+    pass: "<hash-only>",
+    hashstep: hashNextState
+  });
+}
+
+function unlockSuccessOTP(
+  query,
+  password,
+  timeEnd,
+  nowTime,
+  sendResult,
+  extraProps = {}
+) {
+  // Optional 2-step hash
+  const hashType = query["hashtype"] || "";
+  const hashServerSecret = undoSafeB64_32(query["hashsecret"] || "");
+  const hashExtra = query["hashextra"] || "";
+
+  let hashNextState = "";
+  if (!!hashType && hashType !== "undefined") {
+    // Same pass for partial hash
+    // Assume client hash smart like
+    //    (code + key_client1 + key_server + key_client2)
+    //    so client can't abuse us to get state and remember
+    //    like in case of (server_key + client_key + code)
+    let hashKeyPlain = keydecrypt(hashServerSecret, password);
+
+    // Assume both array of bits
+    const hashKeyBits = JSON.parse(hashKeyPlain || "[]");
+    const hashExtraBits = JSON.parse(hashExtra || "[]");
+
+    console.log({ hashKeyPlain, hashKeyBits, hashExtraBits });
+    if (hashKeyBits.length < 2 || hashExtra.length < 2) {
+      sendResult({ err: "Both key & data must be non empty arrays" });
+    } else {
+      hashNextState = hashStep(hashKeyBits, hashType, null);
+      hashNextState = hashStep(hashExtraBits, hashType, hashNextState);
+
+      unlockSuccessSimple(query, password, timeEnd, nowTime, sendResult, {
+        pass: "<hash-only>",
+        hashstep: hashNextState
+      });
+    }
+  }
+}
+
+const unlockSucessCB = {
+  simple: unlockSuccessSimple,
+  "sha-step": unlockSuccessHash,
+  "otp-step": unlockSuccessOTP
+};
+
 // {enckey,end_time,timed_proof, salt} => key
 app.get("/api/unlock/finish", (req, resp) => {
   if (
@@ -144,16 +299,13 @@ app.get("/api/unlock/finish", (req, resp) => {
     resp.send({ err: "Missing params in /unlock/finsih" });
     return;
   }
+  const mode = req.query["mode"] || "simple"; // optional hash\otp step based on password
+
   const enckey = fromSafeURL(req.query["enckey"]);
   const timeStart = new Date(parseInt(req.query["from"] || "0", 10));
   const timeEnd = new Date(parseInt(req.query["to"] || "0", 10));
   const timeProof = req.query["proof"];
   const salt = req.query["salt"];
-
-  // Optional 2-step hash
-  const hashType = req.query["hashtype"] || "";
-  const hashState = req.query["hashstate"] || "";
-  const hashServerSecret = req.query["hashsecret"] || "";
 
   let calcTimeProof = getTimeEndedProof(salt, timeStart, timeEnd, enckey);
   if (calcTimeProof !== timeProof) {
@@ -165,20 +317,10 @@ app.get("/api/unlock/finish", (req, resp) => {
       const keyData = JSON.parse(decrypt(enckey));
       //
       if ((keyData.salt || keyData.s) === salt) {
-        let hashNextState = undefined;
-        if (hashType && hashState && hashServerSecret) {
-          // Same pass for partial hash
-          let hashKeyPlain = decrypt(hashServerSecret);
+        const password = keyData.pass || keyData.p || "error-no-pass-key";
+        const sendResult = (obj) => resp.send(obj);
 
-          if (hashType == "sha256")
-            hashNextState = hash256Step(hashKeyPlain, hashState);
-        }
-
-        resp.send({
-          pass: keyData.pass || keyData.p || "error-no-pass-key",
-          timeLeftOpen: prettyTime(timeEnd - nowTime),
-          hash: hashNextState
-        });
+        unlockSucessCB[mode](req.query, password, timeEnd, nowTime, sendResult);
       } else {
         resp.send({
           err: "Salt of encrypted data mismatch!"
@@ -201,7 +343,6 @@ const {
   createFastCopyTempTokenAPI,
   tempUnlockBeginAPI
 } = require("./temp-token");
-const { hash256Step } = require("./cryptolib/cryptoUtils");
 
 app.get("/api/temp/begin", (req, resp) => {
   if (!req.query["token"] || !req.query["tokenproof"] || !req.query["salt"]) {
