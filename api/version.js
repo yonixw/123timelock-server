@@ -1,1 +1,1 @@
-module.exports = { version: "*v3 31.10.21 b-day + temp pass*" };
+module.exports = { version: "*v3 16.01.22 2-step totp\hash" };
