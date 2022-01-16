@@ -25,7 +25,7 @@ app.use((req, res, next) => {
 });
 app.use(logger("dev"));
 app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 app.use(cookieParser());
 
 const rateLimit = require("express-rate-limit");
@@ -72,13 +72,9 @@ function undoSafeB64_32(b64string) {
   return result;
 }
 
-app.get("/api/redirect", (rq, rs) => {
-  rs.status(403).send({ err: "/api/redirect deprecated" });
-});
-
 // [token times] => {salt=time+rnd, tokens=[{time,hmac(salt+time)}] }
-app.get("/api/setup", (req, resp) => {
-  var tokens = req.query["time"] || ["15m", "30m", "3h", "2d"];
+app.post("/api/setup", (req, resp) => {
+  var tokens = req.body["time"] || ["15m", "30m", "3h", "2d"];
   if (!Array.isArray(tokens)) tokens = [`${tokens}`];
 
   var tokenTimes = tokens.map((e) => {
@@ -95,15 +91,15 @@ app.get("/api/setup", (req, resp) => {
 });
 
 // {pass,salt} => enc_key = enc({pass, hmac(pass + salt+"enc")})
-app.get("/api/enc", (req, resp) => {
-  if (!req.query["pass"] || !req.query["salts"]) {
+app.post("/api/enc", (req, resp) => {
+  if (!req.body["pass"] || !req.body["salts"]) {
     resp.send({ err: "Missing params in /enc or salt not array" });
     return;
   }
 
-  const pass = req.query["pass"];
-  var salts = req.query["salts"];
-  if (!Array.isArray(req.query["salts"])) salts = [`${salts}`];
+  const pass = req.body["pass"];
+  var salts = req.body["salts"];
+  if (!Array.isArray(req.body["salts"])) salts = [`${salts}`];
 
   const encDataArray = salts.map((s) =>
     toSafeURL(encrypt(JSON.stringify({ p: pass, s: s })))
@@ -116,27 +112,27 @@ app.get("/api/enc", (req, resp) => {
 });
 
 // {pass,hashparts[]} => [enc(hashparts, password = pass+secret)]
-app.get("/api/enchash", (req, resp) => {
+app.post("/api/enchash", (req, resp) => {
   // Because we will only decrypt if password is
   // proven to be time unlocked, the user has no incentive
   // to enter a different random password...
   // because no time free password will work since it doesnt have
   // proof of unlock..
 
-  if (!req.query["hashparts"] || !req.query["pass"]) {
+  if (!req.body["hashparts"] || !req.body["pass"]) {
     resp.send({ err: "Missing params in /enchash " });
     return;
   }
 
-  const pass = req.query["pass"];
+  const pass = req.body["pass"];
 
   // Encrypt hashs without depending on salt..
   // keyencrypt() uses our severKey so user can't unlock even
   //    if saving tempPass in textplain
   let hashpartsResult = [];
-  if (req.query["hashparts"]) {
-    let hashparts = req.query["hashparts"];
-    if (!Array.isArray(req.query["hashparts"])) hashparts = [`${hashparts}`];
+  if (req.body["hashparts"]) {
+    let hashparts = req.body["hashparts"];
+    if (!Array.isArray(req.body["hashparts"])) hashparts = [`${hashparts}`];
     hashpartsResult = hashparts.map((e) => keyencrypt(`${e}`, pass));
   }
 
@@ -145,25 +141,25 @@ app.get("/api/enchash", (req, resp) => {
 
 const DEFAULT_UNLOCK_WINDOW_MIN = 15;
 // {enckey, token_time, token_hmac, salt} => {end_time,timed_proof = hmac(time,data_hash)}
-app.get("/api/unlock/begin", (req, resp) => {
+app.post("/api/unlock/begin", (req, resp) => {
   if (
-    !req.query["enckey"] ||
-    !req.query["token"] ||
-    !req.query["tokenproof"] ||
-    !req.query["offsetstartmin"] ||
-    !req.query["duration"] ||
-    !req.query["salt"]
+    !req.body["enckey"] ||
+    !req.body["token"] ||
+    !req.body["tokenproof"] ||
+    !req.body["offsetstartmin"] ||
+    !req.body["duration"] ||
+    !req.body["salt"]
   ) {
     resp.send({ err: "Missing params in /unlock/begin" });
     return;
   }
-  const enckey = fromSafeURL(req.query["enckey"]);
-  const time_string = req.query["token"];
-  const time_token = req.query["tokenproof"];
-  const offset_strat_min = parseInt(req.query["offsetstartmin"], 10) || 0;
+  const enckey = fromSafeURL(req.body["enckey"]);
+  const time_string = req.body["token"];
+  const time_token = req.body["tokenproof"];
+  const offset_strat_min = parseInt(req.body["offsetstartmin"], 10) || 0;
   const duration =
-    parseInt(req.query["duration"], 10) || DEFAULT_UNLOCK_WINDOW_MIN;
-  const salt = req.query["salt"];
+    parseInt(req.body["duration"], 10) || DEFAULT_UNLOCK_WINDOW_MIN;
+  const salt = req.body["salt"];
 
   console.log(
     `>${salt}<, >${time_string}<, >${getTimeToken(
@@ -288,24 +284,24 @@ const unlockSucessCB = {
 };
 
 // {enckey,end_time,timed_proof, salt} => key
-app.get("/api/unlock/finish", (req, resp) => {
+app.post("/api/unlock/finish", (req, resp) => {
   if (
-    !req.query["enckey"] ||
-    !req.query["from"] ||
-    !req.query["to"] ||
-    !req.query["proof"] ||
-    !req.query["salt"]
+    !req.body["enckey"] ||
+    !req.body["from"] ||
+    !req.body["to"] ||
+    !req.body["proof"] ||
+    !req.body["salt"]
   ) {
     resp.send({ err: "Missing params in /unlock/finsih" });
     return;
   }
-  const mode = req.query["mode"] || "simple"; // optional hash\otp step based on password
+  const mode = req.body["mode"] || "simple"; // optional hash\otp step based on password
 
-  const enckey = fromSafeURL(req.query["enckey"]);
-  const timeStart = new Date(parseInt(req.query["from"] || "0", 10));
-  const timeEnd = new Date(parseInt(req.query["to"] || "0", 10));
-  const timeProof = req.query["proof"];
-  const salt = req.query["salt"];
+  const enckey = fromSafeURL(req.body["enckey"]);
+  const timeStart = new Date(parseInt(req.body["from"] || "0", 10));
+  const timeEnd = new Date(parseInt(req.body["to"] || "0", 10));
+  const timeProof = req.body["proof"];
+  const salt = req.body["salt"];
 
   let calcTimeProof = getTimeEndedProof(salt, timeStart, timeEnd, enckey);
   if (calcTimeProof !== timeProof) {
@@ -320,7 +316,7 @@ app.get("/api/unlock/finish", (req, resp) => {
         const password = keyData.pass || keyData.p || "error-no-pass-key";
         const sendResult = (obj) => resp.send(obj);
 
-        unlockSucessCB[mode](req.query, password, timeEnd, nowTime, sendResult);
+        unlockSucessCB[mode](req.body, password, timeEnd, nowTime, sendResult);
       } else {
         resp.send({
           err: "Salt of encrypted data mismatch!"
@@ -344,59 +340,59 @@ const {
   tempUnlockBeginAPI
 } = require("./temp-token");
 
-app.get("/api/temp/begin", (req, resp) => {
-  if (!req.query["token"] || !req.query["tokenproof"] || !req.query["salt"]) {
+app.post("/api/temp/begin", (req, resp) => {
+  if (!req.body["token"] || !req.body["tokenproof"] || !req.body["salt"]) {
     resp.send({ err: "Missing params in /temp/begin" });
     return;
   }
 
-  const time_string = req.query["token"];
-  const time_token = req.query["tokenproof"];
-  const salt = req.query["salt"];
+  const time_string = req.body["token"];
+  const time_token = req.body["tokenproof"];
+  const salt = req.body["salt"];
 
   tempTokenBeginAPI(salt, time_string, time_token, (e) => resp.send(e));
 });
 
-app.get("/api/temp/fastcopy", (req, resp) => {
+app.post("/api/temp/fastcopy", (req, resp) => {
   if (
-    !req.query["token"] ||
-    !req.query["tempproof"] ||
-    !req.query["from"] ||
-    !req.query["salt"]
+    !req.body["token"] ||
+    !req.body["tempproof"] ||
+    !req.body["from"] ||
+    !req.body["salt"]
   ) {
     resp.send({ err: "Missing params in /temp/fastcopy" });
     return;
   }
 
-  const time_string = req.query["token"];
-  const temp_token = req.query["tempproof"];
-  const createTime = req.query["from"];
-  const salt = req.query["salt"];
+  const time_string = req.body["token"];
+  const temp_token = req.body["tempproof"];
+  const createTime = req.body["from"];
+  const salt = req.body["salt"];
 
   createFastCopyTempTokenAPI(time_string, salt, createTime, temp_token, (e) =>
     resp.send(e)
   );
 });
 
-app.get("/api/temp/unlock", (req, resp) => {
+app.post("/api/temp/unlock", (req, resp) => {
   if (
-    !req.query["token"] ||
-    !req.query["salt"] ||
-    !req.query["mindiff"] ||
-    !req.query["fastproof"] ||
-    !req.query["enckey"]
+    !req.body["token"] ||
+    !req.body["salt"] ||
+    !req.body["mindiff"] ||
+    !req.body["fastproof"] ||
+    !req.body["enckey"]
   ) {
     resp.send({ err: "Missing params in /temp/unlock" });
     return;
   }
 
-  const time_string = req.query["token"];
-  const salt = req.query["salt"];
-  const minutediff = req.query["mindiff"];
-  const fastproof = req.query["fastproof"];
-  const enckey = fromSafeURL(req.query["enckey"]);
+  const time_string = req.body["token"];
+  const salt = req.body["salt"];
+  const minutediff = req.body["mindiff"];
+  const fastproof = req.body["fastproof"];
+  const enckey = fromSafeURL(req.body["enckey"]);
   const duration =
-    parseInt(req.query["duration"], 10) || DEFAULT_UNLOCK_WINDOW_MIN;
+    parseInt(req.body["duration"], 10) || DEFAULT_UNLOCK_WINDOW_MIN;
 
   tempUnlockBeginAPI(
     time_string,
